@@ -1,70 +1,82 @@
-const base = import.meta.env.VITE_API_BASE || "http://localhost:8080";
+// web/src/api.ts
+const BASE = "/api"; // nginx proxies /api/* -> http://api:8080/*
 
-export async function predict(features: any) {
-  const r = await fetch(`${base}/predict`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ features }),
+export type Patient = {
+  age: number; sex: number; cp: number; trestbps: number; chol: number;
+  fbs: number; restecg: number; thalach: number; exang: number;
+  oldpeak: number; slope: number; ca: number; thal: number;
+};
+
+async function json<T>(path: string, init?: RequestInit): Promise<T> {
+  const r = await fetch(`${BASE}${path}`, {
+    headers: { "content-type": "application/json" },
+    ...init,
   });
-  if (!r.ok) throw new Error("predict failed");
+  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
   return r.json();
 }
 
-export async function whatif(baseFeat: any, deltas: any) {
-  const r = await fetch(`${base}/whatif`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ base: baseFeat, deltas }),
+export async function health() {
+  return json<{ status: string; py?: any }>("/health");
+}
+
+export async function predict(p: Patient) {
+  return json<{ prob: number; shap: Array<[string, number]> }>("/predict", {
+    method: "POST",
+    body: JSON.stringify(p),
   });
-  if (!r.ok) throw new Error("whatif failed");
+}
+
+export async function whatif(base: Patient, tweaked: Partial<Patient>) {
+  return json<{
+    base: { prob: number; shap: Array<[string, number]> };
+    tweaked: { prob: number; shap: Array<[string, number]> };
+    dprob: number;
+  }>("/whatif", {
+    method: "POST",
+    body: JSON.stringify({ base, tweaked }),
+  });
+}
+
+export async function cohorts(payload: {
+  sex?: number; age_min?: number; age_max?: number; cp?: number[];
+}) {
+  return json<{ summary: any; examples: any[] }>("/cohorts/explore", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function fairness() {
+  return json<{ status: string; groups: any; metrics: { accuracy: number|null } }>(
+    "/metrics/fairness"
+  );
+}
+
+export async function globalShap() {
+  // returns {status:"ok", features:[string[]], shap:[number[]]}
+  return json<{ status: string; features: string[]; shap: number[] }>("/shap/global");
+}
+
+export async function batchUploadCsv(file: File) {
+  const fd = new FormData();
+  fd.append("file", file, file.name);
+  const r = await fetch(`${BASE}/batch/upload`, { method: "POST", body: fd });
+  if (!r.ok) throw new Error(`/batch/upload -> ${r.status}`);
   return r.json();
 }
 
 export async function latestSessions() {
-  const r = await fetch(`${base}/sessions`);
-  if (!r.ok) throw new Error("sessions failed");
-  return r.json();
+  // [{when: "2025-11-04T18:22:51.000Z", model:"heart-v1", prob:0.37, score:0.37}]
+  return json<Array<{ when: string; model: string; prob: number; score: number }>>("/sessions");
 }
 
-export async function batchUploadCsv(file: File) {
-  const form = new FormData();
-  form.append("file", file);
-  const r = await fetch(`${base}/predict-batch`, { method:"POST", body: form });
-  if (!r.ok) throw new Error("batch failed");
-  const text = await r.text();
-  return text;
-}
-
-export async function thresholdsGet() {
-  const r = await fetch(`${base}/health`);
-  return r.json();
-}
-
-export async function thresholdsSet(low:number, high:number) {
-  const r = await fetch(`${base}/config/thresholds`, {
-    method:"POST", headers:{ "content-type":"application/json"},
-    body: JSON.stringify({ low, high })
-  });
-  return r.json();
-}
-
-export async function models() {
-  const r = await fetch(`${base}/models`);
-  return r.json();
-}
-
-export async function fetchGlobalShap() {
-  // Call Python via API passthrough; for simplicity we use api/health to grab py url isn’t exposed; so we add an API endpoint soon if needed.
-  const r = await fetch(`${base}/health`);
-  const j = await r.json();
-  // For the demo, hit the python directly from browser only if CORS open; simplest: add proxy in API; but we'll call API: add /health then fetch py via API -> not needed. We'll just call /health then fetch /shap/global via API soon. For now we skip and use API passthrough omitted.
-  return null;
-}
-
-export async function downloadPdf(features:any) {
-  const r = await fetch(`${base}/report`, {
-    method:"POST", headers: { "content-type":"application/json" },
-    body: JSON.stringify({ features })
-  });
-  if (!r.ok) throw new Error("pdf failed");
+export async function downloadPdf() {
+  const r = await fetch(`${BASE}/report.pdf`);
+  if (!r.ok) throw new Error("report.pdf failed");
   const blob = await r.blob();
-  return URL.createObjectURL(blob);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = "report.pdf"; a.click();
+  URL.revokeObjectURL(url);
 }

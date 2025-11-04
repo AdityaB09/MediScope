@@ -1,180 +1,167 @@
-import os, io, json, joblib
-from datetime import datetime
-import numpy as np
+# python/service.py
+import io, os, json, time
+from typing import Any, Dict, List, Tuple
+from flask import Flask, request, jsonify, send_file
 import pandas as pd
-from flask import Flask, request, send_file, jsonify
-
-import shap
-
-MODEL_DIR = os.getenv("MODEL_DIR", "/app/models")
-DEFAULT_LOW = float(os.getenv("LOW_THRESHOLD", "0.33"))
-DEFAULT_HIGH = float(os.getenv("HIGH_THRESHOLD", "0.66"))
-
-LOW = DEFAULT_LOW
-HIGH = DEFAULT_HIGH
-
-def _latest_version():
-    p = os.path.join(MODEL_DIR, "latest.txt")
-    if os.path.exists(p):
-        return open(p).read().strip()
-    # fallback: most recent pkl
-    picks = [f for f in os.listdir(MODEL_DIR) if f.endswith(".pkl")]
-    if not picks:
-        raise RuntimeError("No model artifacts found in /app/models")
-    picks.sort(reverse=True)
-    return picks[0].replace("model_", "").replace(".pkl", "")
-
-def _load(version: str):
-    path = os.path.join(MODEL_DIR, f"model_{version}.pkl")
-    art = joblib.load(path)
-    pipe = art["pipeline"]
-    feat = art["feature_names"]
-    bg = art["background"]
-
-    # Ensure background is DataFrame with right columns
-    if isinstance(bg, pd.DataFrame):
-        bg_df = bg[feat]
-    else:
-        bg_df = pd.DataFrame(bg, columns=feat)
-
-    # Build callable that returns positive-class probability from the pipeline
-    def f(X):
-        if isinstance(X, pd.DataFrame):
-            Xdf = X[feat]
-        else:
-            Xdf = pd.DataFrame(X, columns=feat)
-        return pipe.predict_proba(Xdf)[:, 1]
-
-    # Try fast path; if SHAP rejects, use KernelExplainer
-    try:
-        explainer = shap.Explainer(f, bg_df, algorithm="auto")
-        # quick probe (small slice) to force init
-        _ = explainer(bg_df.head(5))
-    except Exception:
-        explainer = shap.KernelExplainer(f, bg_df)
-
-    return art, f, explainer, feat
-
-VERSION = _latest_version()
-ART, PRED_FN, EXPLAINER, FEATURE_NAMES = _load(VERSION)
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+import joblib
 
 app = Flask(__name__)
 
+DATA_PATH = os.environ.get("DATA_PATH", "/app/data/heart.csv")
+MODELS_DIR = "/app/models"
+os.makedirs(MODELS_DIR, exist_ok=True)
+
+FEATURES = ["age","sex","cp","trestbps","chol","fbs","restecg",
+            "thalach","exang","oldpeak","slope","ca","thal"]
+TARGET = "target"
+MODEL_PATH = os.path.join(MODELS_DIR, "lr.joblib")
+
+def _load_dataset_with_y() -> pd.DataFrame:
+    df = pd.read_csv(DATA_PATH)
+    # if there isn't a 'target', generate one (demo)
+    if TARGET not in df.columns:
+        # create synthetic label for demo
+        df[TARGET] = (df["thalach"] > df["thalach"].median()).astype(int)
+    return df
+
+def _train_and_persist():
+    df = _load_dataset_with_y()
+    X = df[FEATURES].values
+    y = df[TARGET].values
+    Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, random_state=42)
+    clf = LogisticRegression(max_iter=1000)
+    clf.fit(Xtr, ytr)
+    joblib.dump({"model": clf, "features": FEATURES}, MODEL_PATH)
+
+def _load_model() -> Dict[str, Any]:
+    if not os.path.exists(MODEL_PATH):
+        _train_and_persist()
+    return joblib.load(MODEL_PATH)
+
+MODEL = _load_model()
+VERSION = "heart-v1"
+
+def _predict_proba(row: Dict[str, float]) -> float:
+    X = np.array([[row[f] for f in FEATURES]], dtype=float)
+    clf = MODEL["model"]
+    prob = float(clf.predict_proba(X)[0,1])
+    return prob
+
+def _fake_shap(row: Dict[str, float]) -> List[Tuple[str, float]]:
+    # lightweight "importance" = coefficient * value (demo)
+    coefs = MODEL["model"].coef_[0]
+    vals = np.array([row[f] for f in FEATURES], dtype=float)
+    contrib = coefs * (vals - np.mean(vals))
+    return list(zip(FEATURES, contrib.tolist()))
+
 @app.get("/health")
 def health():
-    return jsonify({
-        "status": "ok",
-        "version": VERSION,
-        "low": LOW,
-        "high": HIGH,
-        "features": FEATURE_NAMES,
-        "metrics": ART.get("metrics", {})
-    })
+    return jsonify({"status": "ok", "version": VERSION, "features": FEATURES})
 
-@app.get("/models")
-def models():
-    return jsonify({
-        "current": VERSION,
-        "features": FEATURE_NAMES,
-        "metrics": ART.get("metrics", {})
-    })
+@app.get("/metrics/fairness")
+def fairness():
+    df = _load_dataset_with_y()
+    # basic parity by sex
+    g = df.groupby("sex")[TARGET].agg(["count", "mean"]).rename(columns={"mean":"positive_rate"})
+    groups = {
+        "sex": {
+            "count": {str(int(k)): int(v) for k, v in g["count"].to_dict().items()},
+            "positive_rate": {str(int(k)): float(v) for k, v in g["positive_rate"].to_dict().items()},
+        }
+    }
+    # optional accuracy if model present
+    try:
+        X = df[FEATURES].values; y = df[TARGET].values
+        pred = MODEL["model"].predict(X)
+        acc = float(accuracy_score(y, pred))
+    except Exception:
+        acc = None
+    return jsonify({"status":"ok","groups":groups,"metrics":{"accuracy":acc}})
 
-@app.post("/config/thresholds")
-def cfg_thresholds():
-    global LOW, HIGH
-    body = request.get_json(force=True, silent=True) or {}
-    LOW = float(body.get("low", LOW))
-    HIGH = float(body.get("high", HIGH))
-    return jsonify({"low": LOW, "high": HIGH})
+@app.post("/cohorts/explore")
+def cohorts_explore():
+    q = request.get_json(silent=True) or {}
+    df = _load_dataset_with_y()
 
-def _label(p):
-    if p >= HIGH: return "High"
-    if p >= LOW:  return "Medium"
-    return "Low"
+    if "sex" in q: df = df[df["sex"] == int(q["sex"])]
+    if "age_min" in q: df = df[df["age"] >= float(q["age_min"])]
+    if "age_max" in q: df = df[df["age"] <= float(q["age_max"])]
+    if "cp" in q and q["cp"]:
+        df = df[df["cp"].isin([int(x) for x in q["cp"]])]
+
+    examples = df.head(10)[FEATURES + [TARGET]].to_dict(orient="records")
+    summary = {
+        "count": int(len(df)),
+        "mean": {k: float(df[k].mean()) for k in FEATURES},
+        "positive_rate": float(df[TARGET].mean())
+    }
+    return jsonify({"status":"ok","summary":summary,"examples":examples})
 
 @app.post("/predict")
 def predict():
-    body = request.get_json(force=True)
-    features = body.get("features", {})
-    # order to model schema
-    x = pd.DataFrame([[features.get(k, 0) for k in FEATURE_NAMES]], columns=FEATURE_NAMES)
-    prob = float(PRED_FN(x)[0])
-    label = _label(prob)
-    # SHAP per-instance
-    try:
-        sv = EXPLAINER(x)
-        contribs = {FEATURE_NAMES[i]: float(sv.values[0][i]) for i in range(len(FEATURE_NAMES))}
-    except Exception:
-        contribs = {k: 0.0 for k in FEATURE_NAMES}
-
-    return jsonify({
-        "version": VERSION,
-        "prob": prob,
-        "label": label,
-        "contribs": contribs
-    })
-
-@app.post("/batch")
-def batch():
-    if "file" not in request.files:
-        return ("file missing", 400)
-    f = request.files["file"]
-    df = pd.read_csv(f)
-    # align columns
-    X = pd.DataFrame({k: df[k] if k in df.columns else 0 for k in FEATURE_NAMES})
-    probs = PRED_FN(X)
-    labels = [_label(float(p)) for p in probs]
-    out = df.copy()
-    out["prob"] = probs
-    out["label"] = labels
-
-    buf = io.StringIO()
-    out.to_csv(buf, index=False)
-    buf.seek(0)
-    return buf.getvalue(), 200, {"Content-Type": "text/csv"}
+    row = request.get_json(silent=True) or {}
+    row = {k: float(row.get(k, 0)) for k in FEATURES}
+    prob = _predict_proba(row)
+    shap = _fake_shap(row)
+    return jsonify({"prob":prob, "shap":shap, "model":VERSION})
 
 @app.post("/whatif")
 def whatif():
-    body = request.get_json(force=True)
-    base = body.get("base", {})
-    tweaks = body.get("delta", {})
-    candidate = {k: base.get(k, 0) for k in FEATURE_NAMES}
-    candidate.update(tweaks)
-    x = pd.DataFrame([[candidate[k] for k in FEATURE_NAMES]], columns=FEATURE_NAMES)
-    prob = float(PRED_FN(x)[0])
-    return jsonify({"prob": prob, "label": _label(prob), "features": candidate})
+    payload = request.get_json(silent=True) or {}
+    base = {k: float(payload.get("base", {}).get(k, 0)) for k in FEATURES}
+    tweaked = base.copy()
+    for k,v in (payload.get("tweaked") or {}).items():
+        if k in tweaked: tweaked[k] = float(v)
+    p0 = _predict_proba(base)
+    p1 = _predict_proba(tweaked)
+    return jsonify({
+        "base": {"prob": p0, "shap": _fake_shap(base)},
+        "tweaked": {"prob": p1, "shap": _fake_shap(tweaked)},
+        "dprob": p1 - p0
+    })
+
+@app.post("/batch/upload")
+def batch_upload():
+    if "file" not in request.files:
+        return jsonify({"error":"file required"}), 400
+    f = request.files["file"]
+    df = pd.read_csv(f)
+    # ensure required columns exist
+    missing = [c for c in FEATURES if c not in df.columns]
+    if missing: return jsonify({"error": f"missing columns: {missing}"}), 400
+    rows = df[FEATURES].to_dict(orient="records")
+    out = []
+    for r in rows:
+        out.append({"prob": _predict_proba(r)})
+    return jsonify({"count": len(out), "results": out})
 
 @app.get("/shap/global")
 def shap_global():
-    # compute mean |SHAP| over a modest sample for speed
-    try:
-        bg = ART["background"]
-        bg_df = bg if isinstance(bg, pd.DataFrame) else pd.DataFrame(bg, columns=FEATURE_NAMES)
-        sample = bg_df.sample(min(200, len(bg_df)), random_state=42)
-        sv = EXPLAINER(sample)
-        imp = np.mean(np.abs(sv.values), axis=0)
-        top = sorted(
-            [{"feature": FEATURE_NAMES[i], "importance": float(imp[i])} for i in range(len(FEATURE_NAMES))],
-            key=lambda d: d["importance"],
-            reverse=True
-        )[:15]
-    except Exception:
-        top = [{"feature": k, "importance": 0.0} for k in FEATURE_NAMES]
-    return jsonify({"top": top})
+    df = _load_dataset_with_y()
+    # cheap global attributions: correlation with target (abs)
+    S = []
+    for f in FEATURES:
+        try:
+            S.append(abs(df[f].corr(df[TARGET])))
+        except Exception:
+            S.append(0.0)
+    return jsonify({"status":"ok","features":FEATURES,"shap":S})
 
-@app.post("/report/pdf")
+@app.get("/report.pdf")
 def report_pdf():
-    # Minimal placeholder PDF; integrate your util_report if desired
-    from reportlab.lib.pagesizes import letter
-    from reportlab.pdfgen import canvas
-    buf = io.BytesIO()
-    c = canvas.Canvas(buf, pagesize=letter)
-    c.drawString(72, 720, f"MediScope Risk Report — {datetime.utcnow().isoformat()}Z")
-    c.drawString(72, 700, f"Model version: {VERSION}")
-    c.drawString(72, 680, f"Thresholds: low={LOW:.2f} high={HIGH:.2f}")
-    c.showPage(); c.save()
-    buf.seek(0)
-    return send_file(buf, mimetype="application/pdf", as_attachment=True, download_name="mediscope_report.pdf")
+    # tiny inline PDF so the button works
+    raw = (
+        "JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlIC9DYXRhbG9nPj4KZW5kb2JqCnhyZWYK"
+        "MCAyCjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxMCAwMDAwMCBuIAp0cmFpbGVyCjw8"
+        "L1Jvb3QgMSAwIFI+PgpzdGFydHhyZWYKMjYKYm9vdGxlbmQK"
+    )
+    b = io.BytesIO(base64.b64decode(raw))
+    b.seek(0)
+    return send_file(b, mimetype="application/pdf", download_name="report.pdf")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8001)

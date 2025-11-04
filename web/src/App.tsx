@@ -6,7 +6,9 @@ import WhatIfPanel from "./components/WhatIfPanel";
 import BatchPanel from "./components/BatchPanel";
 import ThresholdTuner from "./components/ThresholdTuner";
 import GlobalShapCard from "./components/GlobalShapCard";
-import { predict, latestSessions, whatif, downloadPdf } from "./api";
+import { predict, whatif, downloadPdf, latestSessions } from "./api";
+import FairnessDashboard from "./components/FairnessDashboard";
+import CohortExplorer from "./components/CohortExplorer";
 
 export default function App() {
   const [result, setResult] = useState<any>(null);            // base prediction result
@@ -63,6 +65,11 @@ export default function App() {
         </div>
       </div>
 
+      <div className="grid-2">
+  <FairnessDashboard/>
+  <CohortExplorer/>
+</div>
+      
       <div className="grid-2">
         <WhatIfPanel
           base={lastFeatures}

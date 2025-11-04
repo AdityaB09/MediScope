@@ -1,68 +1,54 @@
 services:
   db:
     image: postgres:15
-    container_name: mediscope_db
     environment:
-      POSTGRES_USER: ${PGUSER}
-      POSTGRES_PASSWORD: ${PGPASSWORD}
-      POSTGRES_DB: ${PGDATABASE}
+      POSTGRES_DB: mediscope
+      POSTGRES_USER: mediscope
+      POSTGRES_PASSWORD: mediscope
     ports: ["5432:5432"]
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-      - ./db/init.sql:/docker-entrypoint-initdb.d/00-init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${PGUSER} -d ${PGDATABASE}"]
+      test: ["CMD-SHELL", "pg_isready -U mediscope -d mediscope"]
       interval: 5s
-      timeout: 5s
+      timeout: 3s
       retries: 10
+    volumes:
+      - mediscope_pgdata:/var/lib/postgresql/data
 
   python:
-    image: mediscope_python:latest
-    container_name: mediscope_python
     build:
       context: ./python
+    container_name: mediscope_python
+    command: ["python", "service.py"]
     environment:
-      MODEL_DIR: /app/models
-      ACTIVE_MODEL: latest
-      HOST: 0.0.0.0
-      PORT: "8001"
-      LOW_THRESH: "0.33"
-      HIGH_THRESH: "0.66"
-      ALERT_WEBHOOK: ""   # optional: set to http://host.docker.internal:9000/hook for demo
+      - DATA_PATH=/app/heart.csv
+      - MODEL_DIR=/app/models
+      - PORT=8001
     volumes:
-      - pythonmodels:/app/models
-    depends_on:
-      - db
+      - ./data/heart.csv:/app/heart.csv:ro
+      - ./models:/app/models
     ports: ["8001:8001"]
-
-  api:
-    image: mediscope_api:latest
-    container_name: mediscope_api
-    build:
-      context: ./api
-    environment:
-      ASPNETCORE_URLS: http://+:8080
-      PY_SERVICE_URL: http://python:8001
-      ConnectionStrings__Main: Host=db;Port=5432;Database=${PGDATABASE};Username=${PGUSER};Password=${PGPASSWORD}
-      AllowedOrigins: http://localhost:5173
     depends_on:
       db:
         condition: service_healthy
-      python:
-        condition: service_started
+
+  api:
+    build:
+      context: ./api
+    container_name: mediscope_api
+    environment:
+      - PY_BASE=http://python:8001
+      - ASPNETCORE_URLS=http://+:8080
     ports: ["8080:8080"]
+    depends_on:
+      - python
 
   web:
-    image: mediscope_web:latest
-    container_name: mediscope_web
     build:
       context: ./web
-    environment:
-      VITE_API_BASE: http://localhost:8080
+    container_name: mediscope_web
     ports: ["5173:80"]
     depends_on:
       - api
 
 volumes:
-  pgdata:
-  pythonmodels:
+  mediscope_pgdata:

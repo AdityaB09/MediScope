@@ -1,69 +1,30 @@
-using System.Text.Json;
-using System.Text.Json.Nodes;
-using api.Models;
-using Npgsql;
+// api/Data/AppDb.cs
+using System.Collections.Concurrent;
+using Api.Models;
 
-namespace api.Data;
-
-public class AppDb
+namespace Api.Data
 {
-    private readonly string _conn;
-    public AppDb(string conn) => _conn = conn;
-
-    public async Task InsertSessionAsync(SessionRow row)
+    /// <summary>
+    /// Minimal in-memory session log that matches the signatures your API expects.
+    /// You can swap this to a Postgres-backed implementation later without changing endpoints.
+    /// </summary>
+    public class AppDb
     {
-        await using var con = new NpgsqlConnection(_conn);
-        await con.OpenAsync();
+        private static readonly ConcurrentQueue<SessionRow> _sessions = new();
 
-        var patientJson = JsonSerializer.Serialize(row.PatientJson);
-        var shapJson = JsonSerializer.Serialize(row.Shap);
-
-        const string sql = @"
-            INSERT INTO sessions (id, created_at, model_version, patient_json, risk_label, risk_score, shap)
-            VALUES (@id, @created_at, @model_version, @patient_json::jsonb, @risk_label, @risk_score, @shap::jsonb)";
-
-        await using var cmd = new NpgsqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("id", row.Id);
-        cmd.Parameters.AddWithValue("created_at", row.CreatedAt);
-        cmd.Parameters.AddWithValue("model_version", row.ModelVersion);
-        cmd.Parameters.AddWithValue("patient_json", patientJson);
-        cmd.Parameters.AddWithValue("risk_label", row.RiskLabel);
-        cmd.Parameters.AddWithValue("risk_score", row.RiskScore);
-        cmd.Parameters.AddWithValue("shap", shapJson);
-
-        await cmd.ExecuteNonQueryAsync();
-    }
-
-    public async Task<List<SessionRow>> LatestAsync(int n)
-    {
-        await using var con = new NpgsqlConnection(_conn);
-        await con.OpenAsync();
-
-        const string sql = @"
-            SELECT id, created_at, model_version, patient_json, risk_label, risk_score, shap
-            FROM sessions
-            ORDER BY created_at DESC
-            LIMIT @n";
-
-        await using var cmd = new NpgsqlCommand(sql, con);
-        cmd.Parameters.AddWithValue("n", n);
-
-        var list = new List<SessionRow>();
-        await using var rdr = await cmd.ExecuteReaderAsync();
-        while (await rdr.ReadAsync())
+        public Task InsertSessionAsync(SessionRow row)
         {
-            var row = new SessionRow
-            {
-                Id = rdr.GetGuid(0),
-                CreatedAt = rdr.GetDateTime(1),
-                ModelVersion = rdr.GetString(2),
-                PatientJson = JsonSerializer.Deserialize<JsonObject>(rdr.GetString(3)) ?? new(),
-                RiskLabel = rdr.GetString(4),
-                RiskScore = rdr.GetDouble(5),
-                Shap = JsonSerializer.Deserialize<Dictionary<string,double>>(rdr.GetString(6)) ?? new()
-            };
-            list.Add(row);
+            _sessions.Enqueue(row);
+            // keep a bounded log
+            while (_sessions.Count > 200 && _sessions.TryDequeue(out _)) {}
+            return Task.CompletedTask;
         }
-        return list;
+
+        public Task<List<SessionRow>> LatestAsync(int limit)
+        {
+            // newest first
+            var list = _sessions.Reverse().Take(limit).ToList();
+            return Task.FromResult(list);
+        }
     }
 }

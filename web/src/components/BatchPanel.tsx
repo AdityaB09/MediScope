@@ -1,29 +1,39 @@
 import React, { useState } from "react";
 import { batchUploadCsv } from "../api";
 
-export default function BatchPanel(){
+export default function BatchPanel() {
   const [csv, setCsv] = useState<string>("");
-  const [file, setFile] = useState<File|null>(null);
+  const [msg, setMsg] = useState<string>("");
 
-  const onUpload = async ()=>{
-    if (!file) return;
-    const text = await batchUploadCsv(file);
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const text = await f.text();
     setCsv(text);
-  };
+  }
+
+  async function upload() {
+    setMsg("Uploading…");
+    try {
+      const res = await batchUploadCsv(csv);
+      setMsg(typeof res === "string" ? res : JSON.stringify(res));
+    } catch (e: any) {
+      setMsg(e?.message || "upload failed");
+    }
+  }
 
   return (
-    <div className="card">
-      <h2>Batch Scoring (CSV)</h2>
-      <input type="file" accept=".csv" onChange={e=>setFile(e.target.files?.[0] ?? null)} />
-      <div style={{marginTop:8}}>
-        <button onClick={onUpload}>Score</button>
-      </div>
-      {csv && (
-        <div style={{marginTop:12}}>
-          <a href={`data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`} download="batch_results.csv">Download results.csv</a>
-          <pre style={{whiteSpace:"pre-wrap"}} className="muted">{csv.slice(0,800)}...</pre>
-        </div>
-      )}
+    <div className="p-3 rounded-xl bg-[#111827]">
+      <div className="font-semibold mb-2">Batch Scoring (CSV)</div>
+      <input type="file" accept=".csv,text/csv" onChange={onFile} />
+      <button
+        onClick={upload}
+        className="ml-2 btn"
+        style={{ background: "var(--accent)", borderRadius: 10, padding: "6px 10px", fontWeight: 600 }}
+      >
+        Upload
+      </button>
+      {msg && <div className="mt-2 text-sm opacity-70 break-all">{msg}</div>}
     </div>
   );
 }

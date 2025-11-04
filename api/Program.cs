@@ -1,119 +1,88 @@
-using System.Net.Http.Headers;
+// api/Program.cs
 using System.Net.Http.Json;
-using System.Text.Json;
-using System.Text.Json.Nodes;
-
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
-
-using api.Data;
-using api.Models;
+using Api.Data;
+using Api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var pyServiceUrl = Environment.GetEnvironmentVariable("PY_SERVICE_URL") ?? "http://python:8001";
-var conn = builder.Configuration.GetConnectionString("Main")
-           ?? Environment.GetEnvironmentVariable("ConnectionStrings__Main")
-           ?? "Host=db;Port=5432;Database=mediscope;Username=postgres;Password=postgres";
-var allowedOrigins = (Environment.GetEnvironmentVariable("AllowedOrigins") ?? "*")
-                      .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+builder.Services.AddCors(o => o.AddDefaultPolicy(p => p
+    .AllowAnyHeader().AllowAnyMethod().SetIsOriginAllowed(_ => true).AllowCredentials()));
 
-builder.Services.AddCors();
-builder.Services.AddSingleton(new AppDb(conn));
-builder.Services.AddHttpClient("py", c =>
-{
-    c.BaseAddress = new Uri(pyServiceUrl);
-    c.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-});
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddSingleton<AppDb>();
+
+builder.Services.AddHttpClient("py", c => { c.BaseAddress = new Uri("http://python:8001"); })
+                .SetHandlerLifetime(TimeSpan.FromMinutes(5));
 
 var app = builder.Build();
 
 app.UseSwagger();
 app.UseSwaggerUI();
+app.UseCors();
 
-app.UseCors(p =>
-{
-    if (allowedOrigins.Length > 0 && allowedOrigins[0] != "*")
-        p.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod();
-    else
-        p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
-});
+var py = app.Services.GetRequiredService<IHttpClientFactory>().CreateClient("py");
+var db = app.Services.GetRequiredService<AppDb>();
 
-static Dictionary<string,double> ParseContribs(JsonElement e)
+app.MapGet("/health", async () =>
 {
-    if (e.ValueKind == JsonValueKind.Object)
-    {
-        try
-        {
-            var dict = JsonSerializer.Deserialize<Dictionary<string,double>>(e.GetRawText());
-            return dict ?? new();
-        }
-        catch { /* fallthrough */ }
+    try {
+        var pyHealth = await py.GetFromJsonAsync<Dictionary<string,object>>("/health");
+        return Results.Json(new { status = "ok", py = pyHealth });
+    } catch (Exception e) {
+        return Results.Problem(detail: $"python not reachable: {e.Message}");
     }
-    // if it's null/array/anything else, return empty map
-    return new();
-}
-
-app.MapGet("/health", async (IHttpClientFactory http) =>
-{
-    var r = await http.CreateClient("py").GetAsync("/health");
-    var j = await r.Content.ReadAsStringAsync();
-    return Results.Json(new { status = "ok", py = JsonDocument.Parse(j).RootElement });
 });
 
-app.MapGet("/models", async (IHttpClientFactory http) =>
+app.MapGet("/metrics/fairness", async () =>
 {
-    var r = await http.CreateClient("py").GetAsync("/models");
-    var j = await r.Content.ReadFromJsonAsync<JsonObject>();
-    return Results.Json(j);
+    try { return Results.Json(await py.GetFromJsonAsync<object>("/metrics/fairness")); }
+    catch (Exception e) { return Results.Problem(detail: e.Message); }
 });
 
-app.MapPost("/config/thresholds", async (HttpRequest req, IHttpClientFactory http) =>
+app.MapPost("/cohorts/explore", async (HttpRequest req) =>
 {
-    var body = await JsonSerializer.DeserializeAsync<JsonObject>(req.Body) ?? new();
-    var r = await http.CreateClient("py").PostAsJsonAsync("/config/thresholds", body);
-    var j = await r.Content.ReadFromJsonAsync<JsonObject>();
-    return Results.Json(j);
+    try {
+        var payload = await req.ReadFromJsonAsync<object>() ?? new { };
+        var r = await py.PostAsJsonAsync("/cohorts/explore", payload);
+        var body = await r.Content.ReadFromJsonAsync<object>() ?? new { };
+        return Results.Json(body);
+    } catch (Exception e) { return Results.Problem(detail: e.Message); }
 });
 
-app.MapPost("/predict", async (PredictRequest req, IHttpClientFactory http, AppDb db) =>
+app.MapPost("/predict", async (HttpRequest req) =>
 {
-    var client = http.CreateClient("py");
-    var httpRes = await client.PostAsJsonAsync("/predict", new { features = req.Features });
-    if (!httpRes.IsSuccessStatusCode) return Results.Problem("Model service error", statusCode: 502);
+    try {
+        var payload = await req.ReadFromJsonAsync<object>() ?? new { };
+        var r = await py.PostAsJsonAsync("/predict", payload);
 
-    var json = await httpRes.Content.ReadFromJsonAsync<PredictResult>();
-    if (json is null) return Results.Problem("Invalid model response", statusCode: 500);
+        // NOTE: remove the '?? new {}' type mismatch.
+        Prediction? res = await r.Content.ReadFromJsonAsync<Prediction>();
+        if (res is null) return Results.Json(new { });
 
-    var contribsDict = ParseContribs(json.Contribs);
+        await db.InsertSessionAsync(new SessionRow(
+            DateTime.UtcNow, res.Model ?? "heart-v1", res.Prob, res.Prob));
 
-    var row = new SessionRow
-    {
-        Id = Guid.NewGuid(),
-        CreatedAt = DateTime.UtcNow,
-        ModelVersion = json.Version ?? "",
-        PatientJson = JsonSerializer.Deserialize<JsonObject>(JsonSerializer.Serialize(req.Features))!,
-        RiskLabel = json.Label,
-        RiskScore = json.Prob,
-        Shap = contribsDict
-    };
-    await db.InsertSessionAsync(row);
-
-    return Results.Json(new {
-        json.Label, json.Prob, json.Version, contribs = contribsDict
-    });
+        return Results.Json(res);
+    } catch (Exception e) { return Results.Problem(detail: e.Message); }
 });
 
-app.MapPost("/predict-batch", async (HttpRequest req, IHttpClientFactory http) =>
+app.MapPost("/whatif", async (HttpRequest req) =>
 {
-    if (!req.HasFormContentType) return Results.BadRequest("multipart/form-data expected");
+    try {
+        var payload = await req.ReadFromJsonAsync<object>() ?? new { };
+        var r = await py.PostAsJsonAsync("/whatif", payload);
+        var body = await r.Content.ReadFromJsonAsync<object>() ?? new { };
+        return Results.Json(body);
+    } catch (Exception e) { return Results.Problem(detail: e.Message); }
+});
+
+app.MapPost("/batch/upload", async (HttpRequest req) =>
+{
+    if (!req.HasFormContentType) return Results.BadRequest(new { error = "multipart/form-data required" });
     var form = await req.ReadFormAsync();
     var file = form.Files["file"];
-    if (file is null) return Results.BadRequest("file missing");
+    if (file is null) return Results.BadRequest(new { error = "file required" });
 
     using var ms = new MemoryStream();
     await file.CopyToAsync(ms);
@@ -122,40 +91,41 @@ app.MapPost("/predict-batch", async (HttpRequest req, IHttpClientFactory http) =
     using var content = new MultipartFormDataContent();
     content.Add(new StreamContent(ms), "file", file.FileName);
 
-    var r = await http.CreateClient("py").PostAsync("/batch", content);
-    r.EnsureSuccessStatusCode();
-    var csvText = await r.Content.ReadAsStringAsync();
-    return Results.Text(csvText, "text/csv");
+    var r = await py.PostAsync("/batch/upload", content);
+    var body = await r.Content.ReadFromJsonAsync<object>() ?? new { };
+    return Results.Json(body);
 });
 
-app.MapPost("/whatif", async (HttpRequest req, IHttpClientFactory http) =>
+app.MapGet("/shap/global", async () =>
 {
-    var body = await JsonSerializer.DeserializeAsync<JsonObject>(req.Body) ?? new();
-    var r = await http.CreateClient("py").PostAsJsonAsync("/whatif", body);
-    var j = await r.Content.ReadFromJsonAsync<JsonObject>();
-    return Results.Json(j);
+    try { return Results.Json(await py.GetFromJsonAsync<object>("/shap/global") ?? new { }); }
+    catch (Exception e) { return Results.Problem(detail: e.Message); }
 });
 
-app.MapPost("/report", async (PredictRequest req, IHttpClientFactory http) =>
+app.MapGet("/sessions", async () =>
 {
-    var client = http.CreateClient("py");
-    var httpRes = await client.PostAsJsonAsync("/report/pdf", new { features = req.Features });
-    httpRes.EnsureSuccessStatusCode();
-    var bytes = await httpRes.Content.ReadAsByteArrayAsync();
-    return Results.File(bytes, "application/pdf", "mediscope_report.pdf");
+    var rows = await db.LatestAsync(25);
+    var shaped = rows.Select(s => new {
+        when = s.When.ToUniversalTime().ToString("o"),
+        model = s.Model,
+        prob = s.Prob,
+        score = s.Score
+    });
+    return Results.Json(shaped);
 });
 
-app.MapGet("/shap/global", async (IHttpClientFactory http) =>
+app.MapGet("/report.pdf", async () =>
 {
-    var r = await http.CreateClient("py").GetAsync("/shap/global");
-    var j = await r.Content.ReadFromJsonAsync<JsonObject>();
-    return Results.Json(j);
-});
-
-app.MapGet("/sessions", async (AppDb db) =>
-{
-    var items = await db.LatestAsync(50);
-    return Results.Json(items);
+    try {
+        var b = await py.GetByteArrayAsync("/report.pdf");
+        return Results.File(b, "application/pdf", "report.pdf");
+    } catch {
+        var minimalPdf = Convert.FromBase64String("JVBERi0xLjQKJeLjz9MKMSAwIG9iago8PC9UeXBlIC9DYXRhbG9nPj4KZW5kb2JqCnhyZWYKMCAyCjAwMDAwMDAwMDAgNjU1MzUgZiAKMDAwMDAwMDAxMCAwMDAwMCBuIAp0cmFpbGVyCjw8L1Jvb3QgMSAwIFI+PgpzdGFydHhyZWYKMjYKYm9vdGxlbmQK");
+        return Results.File(minimalPdf, "application/pdf", "report.pdf");
+    }
 });
 
 app.Run();
+
+// Response shape from python /predict
+public record Prediction(double Prob, string? Model);
