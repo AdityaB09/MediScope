@@ -1,0 +1,25 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1"/>
+    <title>MediScope</title>
+    <style>
+      body { font-family: system-ui, Segoe UI, Roboto, Helvetica, Arial; margin:0; background:#0b1220; color:#e5e7eb;}
+      .container { max-width: 1200px; margin:0 auto; padding:20px;}
+      .card { background:#111827; border-radius:16px; padding:16px; box-shadow:0 10px 30px rgba(0,0,0,.25); margin-bottom:16px;}
+      input, select { background:#1f2937; color:#e5e7eb; border:1px solid #334155; border-radius:8px; padding:8px; width:100%;}
+      button { background:#60a5fa; color:#081018; border:none; padding:10px 14px; border-radius:12px; font-weight:700; cursor:pointer;}
+      .grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:16px;}
+      .row { display:grid; grid-template-columns: repeat(4, 1fr); gap: 10px;}
+      .muted { color:#94a3b8; font-size:12px;}
+      table { width:100%; border-collapse: collapse;}
+      th, td { padding:8px; border-bottom:1px solid #334155; text-align:left;}
+      .actions { display:flex; gap:8px; flex-wrap:wrap;}
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
