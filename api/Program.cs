@@ -13,16 +13,14 @@ using api.Models;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var pyServiceUrl = Environment.GetEnvironmentVariable("PY_SERVICE_URL") ?? "http://localhost:8001";
+var pyServiceUrl = Environment.GetEnvironmentVariable("PY_SERVICE_URL") ?? "http://python:8001";
 var conn = builder.Configuration.GetConnectionString("Main")
            ?? Environment.GetEnvironmentVariable("ConnectionStrings__Main")
-           ?? "Host=localhost;Port=5432;Database=mediscope;Username=mediscope;Password=mediscope";
+           ?? "Host=db;Port=5432;Database=mediscope;Username=postgres;Password=postgres";
 var allowedOrigins = (Environment.GetEnvironmentVariable("AllowedOrigins") ?? "*")
                       .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-// 🔑 Register CORS services (this was missing)
 builder.Services.AddCors();
-
 builder.Services.AddSingleton(new AppDb(conn));
 builder.Services.AddHttpClient("py", c =>
 {
@@ -37,7 +35,6 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// CORS middleware
 app.UseCors(p =>
 {
     if (allowedOrigins.Length > 0 && allowedOrigins[0] != "*")
@@ -45,6 +42,21 @@ app.UseCors(p =>
     else
         p.AllowAnyOrigin().AllowAnyHeader().AllowAnyMethod();
 });
+
+static Dictionary<string,double> ParseContribs(JsonElement e)
+{
+    if (e.ValueKind == JsonValueKind.Object)
+    {
+        try
+        {
+            var dict = JsonSerializer.Deserialize<Dictionary<string,double>>(e.GetRawText());
+            return dict ?? new();
+        }
+        catch { /* fallthrough */ }
+    }
+    // if it's null/array/anything else, return empty map
+    return new();
+}
 
 app.MapGet("/health", async (IHttpClientFactory http) =>
 {
@@ -73,8 +85,11 @@ app.MapPost("/predict", async (PredictRequest req, IHttpClientFactory http, AppD
     var client = http.CreateClient("py");
     var httpRes = await client.PostAsJsonAsync("/predict", new { features = req.Features });
     if (!httpRes.IsSuccessStatusCode) return Results.Problem("Model service error", statusCode: 502);
+
     var json = await httpRes.Content.ReadFromJsonAsync<PredictResult>();
     if (json is null) return Results.Problem("Invalid model response", statusCode: 500);
+
+    var contribsDict = ParseContribs(json.Contribs);
 
     var row = new SessionRow
     {
@@ -84,10 +99,13 @@ app.MapPost("/predict", async (PredictRequest req, IHttpClientFactory http, AppD
         PatientJson = JsonSerializer.Deserialize<JsonObject>(JsonSerializer.Serialize(req.Features))!,
         RiskLabel = json.Label,
         RiskScore = json.Prob,
-        Shap = json.Contribs
+        Shap = contribsDict
     };
     await db.InsertSessionAsync(row);
-    return Results.Json(json);
+
+    return Results.Json(new {
+        json.Label, json.Prob, json.Version, contribs = contribsDict
+    });
 });
 
 app.MapPost("/predict-batch", async (HttpRequest req, IHttpClientFactory http) =>
@@ -96,11 +114,16 @@ app.MapPost("/predict-batch", async (HttpRequest req, IHttpClientFactory http) =
     var form = await req.ReadFormAsync();
     var file = form.Files["file"];
     if (file is null) return Results.BadRequest("file missing");
-    using var ms = new MemoryStream(); await file.CopyToAsync(ms);
+
+    using var ms = new MemoryStream();
+    await file.CopyToAsync(ms);
     ms.Position = 0;
-    var content = new MultipartFormDataContent();
+
+    using var content = new MultipartFormDataContent();
     content.Add(new StreamContent(ms), "file", file.FileName);
+
     var r = await http.CreateClient("py").PostAsync("/batch", content);
+    r.EnsureSuccessStatusCode();
     var csvText = await r.Content.ReadAsStringAsync();
     return Results.Text(csvText, "text/csv");
 });
@@ -117,6 +140,7 @@ app.MapPost("/report", async (PredictRequest req, IHttpClientFactory http) =>
 {
     var client = http.CreateClient("py");
     var httpRes = await client.PostAsJsonAsync("/report/pdf", new { features = req.Features });
+    httpRes.EnsureSuccessStatusCode();
     var bytes = await httpRes.Content.ReadAsByteArrayAsync();
     return Results.File(bytes, "application/pdf", "mediscope_report.pdf");
 });

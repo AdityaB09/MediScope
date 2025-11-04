@@ -9,7 +9,7 @@ import GlobalShapCard from "./components/GlobalShapCard";
 import { predict, latestSessions, whatif, downloadPdf } from "./api";
 
 export default function App() {
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<any>(null);            // base prediction result
   const [lastFeatures, setLastFeatures] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [whatifResult, setWhatIf] = useState<any>(null);
@@ -18,18 +18,18 @@ export default function App() {
     setLastFeatures(features);
     const r = await predict(features);
     setResult(r);
-    const s = await latestSessions();
-    setSessions(s);
     setWhatIf(null);
+    const s = await latestSessions().catch(()=>[]);
+    setSessions(s);
   };
 
-  const runWhatIf = async (deltas:any)=>{
+  const runWhatIf = async (deltas:any) => {
     if (!lastFeatures) return;
     const j = await whatif(lastFeatures, deltas);
     setWhatIf(j);
   };
 
-  const makePdf = async (features:any)=>{
+  const makePdf = async (features:any) => {
     const url = await downloadPdf(features);
     const a = document.createElement("a");
     a.href = url; a.download = "mediscope_report.pdf";
@@ -39,11 +39,13 @@ export default function App() {
 
   useEffect(() => { latestSessions().then(setSessions).catch(()=>{}); }, []);
 
+  const pct = (v:number|undefined) => v !== undefined ? (v*100).toFixed(1) : "--";
+
   return (
     <div className="container">
       <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline"}}>
         <div style={{fontWeight:800, fontSize:24}}>MediScope — Predictive Healthcare</div>
-        <a href="http://localhost:8080/swagger" target="_blank">API Docs</a>
+        <a href="http://localhost:8080/swagger" target="_blank" rel="noreferrer">API Docs</a>
       </div>
 
       <div className="grid-2">
@@ -62,22 +64,26 @@ export default function App() {
       </div>
 
       <div className="grid-2">
-        <WhatIfPanel base={lastFeatures} onRun={runWhatIf}/>
+        <WhatIfPanel
+          base={lastFeatures}
+          basePredReady={!!result}        // ✅ lock What-If until base exists
+          onRun={runWhatIf}
+        />
         <div className="card">
           <h2>What-If Result</h2>
           {whatifResult ? (
             <div>
-              <div>Δprob: {(whatifResult.delta_prob*100).toFixed(2)}%</div>
+              <div>Δprob: {pct(whatifResult.delta_prob)}%</div>
               <div className="grid-2" style={{marginTop:8}}>
                 <div>
                   <h3>Base</h3>
-                  <div className="muted">prob {(whatifResult.base.prob*100).toFixed(1)}% — {whatifResult.base.label}</div>
-                  <ShapBar contribs={whatifResult.base.contribs}/>
+                  <div className="muted">prob {pct(whatifResult.base?.prob)}% — {whatifResult.base?.label}</div>
+                  <ShapBar contribs={whatifResult.base?.contribs || {}}/>
                 </div>
                 <div>
                   <h3>Tweaked</h3>
-                  <div className="muted">prob {(whatifResult.tweaked.prob*100).toFixed(1)}% — {whatifResult.tweaked.label}</div>
-                  <ShapBar contribs={whatifResult.tweaked.contribs}/>
+                  <div className="muted">prob {pct(whatifResult.tweaked?.prob)}% — {whatifResult.tweaked?.label}</div>
+                  <ShapBar contribs={whatifResult.tweaked?.contribs || {}}/>
                 </div>
               </div>
             </div>
@@ -109,7 +115,7 @@ export default function App() {
         </table>
       </div>
 
-      <div className="muted">Dataset: UCI Heart Disease (Cleveland); Model: Logistic Regression (scaled). Features match heart.csv.</div>
+      <div className="muted">Dataset: UCI Heart Disease (Cleveland); Model: Logistic Regression (scaled).</div>
     </div>
   );
 }

@@ -10,5 +10,7 @@ public class SessionRow
     public JsonObject PatientJson { get; set; } = new();
     public string RiskLabel { get; set; } = "";
     public double RiskScore { get; set; }
-    public JsonObject Shap { get; set; } = new();
+
+    // Store SHAP as a dictionary; we’ll serialize to jsonb in AppDb
+    public Dictionary<string, double> Shap { get; set; } = new();
 }
