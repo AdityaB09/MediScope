@@ -5,7 +5,7 @@ COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY train.py service.py util_report.py ./
-
+COPY data/heart.csv /app/data/heart.csv
 # Build-time train — write versioned artifact in /app/models
 ENV MODEL_DIR=/app/models
 RUN mkdir -p $MODEL_DIR && python train.py
