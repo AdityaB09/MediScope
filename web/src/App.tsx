@@ -69,7 +69,7 @@ export default function App() {
 
   return (
     <div className="container">
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" color: "white" }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", color: "white" }}>
         <div style={{ fontWeight: 800, fontSize: 24 }}>MediScope — Predictive Healthcare</div>
         <div style={{ display: "flex", gap: 10 }}>
           <a className="btn" href="http://localhost:8080/swagger" target="_blank" rel="noreferrer">API Docs</a>
