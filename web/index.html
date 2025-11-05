@@ -6,7 +6,6 @@
   window.__API_BASE = "https://mediscope-jtyv.onrender.com";
 
 </script>
-<link rel="stylesheet" href="/styles.css" />
 
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
@@ -24,6 +23,134 @@
       th, td { padding:8px; border-bottom:1px solid #334155; text-align:left;}
       .actions { display:flex; gap:8px; flex-wrap:wrap;}
     </style> -->
+    <style>
+  /* ==== Light Theme Tokens (only these need tweaking later) ==== */
+  :root{
+    --bg:        #f7f9fb;     /* page background */
+    --text:      #0f172a;     /* main text (slate-900) */
+    --muted:     #64748b;     /* secondary text (slate-500) */
+
+    --panel:     #ffffff;     /* cards */
+    --ring:      #e2e8f0;     /* subtle borders (slate-200) */
+    --shadow:    0 8px 28px rgba(2,6,23,0.06);
+
+    --input:     #ffffff;     /* inputs background */
+    --input-br:  #cbd5e1;     /* inputs border (slate-300) */
+    --input-tx:  #0f172a;
+
+    --brand:     #0ea5e9;     /* primary brand (sky-500) */
+    --accent:    #38bdf8;     /* lighter accent (sky-400) */
+    --accent-ink:#ffffff;     /* text on primary buttons */
+
+    --good:      #10b981;     /* success */
+    --warn:      #f59e0b;     /* warning */
+    --bad:       #ef4444;     /* error */
+  }
+
+  /* ==== Base ==== */
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.45 system-ui, Segoe UI, Roboto, Helvetica, Arial;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  a { color: var(--brand); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  /* ==== Cards / Layout ==== */
+  .card {
+    background: var(--panel);
+    border-radius: 16px;
+    padding: 16px;
+    border: 1px solid var(--ring);
+    box-shadow: var(--shadow);
+    margin-bottom: 16px;
+  }
+
+  .grid-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+
+  /* fixed typo (was "display:gri d") */
+  .row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  /* ==== Forms ==== */
+  input, select {
+    background: var(--input);
+    color: var(--input-tx);
+    border: 1px solid var(--input-br);
+    border-radius: 10px;
+    padding: 10px 12px;
+    width: 100%;
+    outline: none;
+    transition: border-color .15s ease, box-shadow .15s ease;
+  }
+  input:focus, select:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 4px rgba(14,165,233,0.15);
+  }
+  input::placeholder { color: #94a3b8; }
+
+  /* ==== Buttons ==== */
+  button, .btn {
+    background: linear-gradient(180deg, var(--accent) 0%, var(--brand) 100%);
+    color: var(--accent-ink);
+    border: none;
+    padding: 10px 14px;
+    border-radius: 12px;
+    font-weight: 700;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(14,165,233,0.24);
+    transition: transform .06s ease, filter .15s ease, box-shadow .15s ease;
+  }
+  button:hover, .btn:hover { filter: brightness(0.98); }
+  button:active, .btn:active { transform: translateY(1px); }
+  button:disabled, .btn:disabled {
+    opacity: .6;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  /* ==== Tables ==== */
+  table { width: 100%; border-collapse: collapse; }
+  th, td {
+    padding: 10px 8px;
+    border-bottom: 1px solid var(--ring);
+    text-align: left;
+    font-size: 14px;
+  }
+  thead th {
+    color: var(--muted);
+    font-weight: 700;
+    letter-spacing: .02em;
+  }
+
+  /* ==== Utilities ==== */
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .muted { color: var(--muted); font-size: 12px; }
+
+  /* subtle separators for dense blocks */
+  .soft-sep { border-top: 1px solid var(--ring); margin: 10px 0; }
+
+  /* ==== Responsive ==== */
+  @media (max-width: 900px) {
+    .grid-2 { grid-template-columns: 1fr; }
+    .row { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+
   </head>
   <body>
     <div id="root"></div>
