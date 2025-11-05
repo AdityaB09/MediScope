@@ -83,15 +83,35 @@ export async function latestSessions() {
   }));
 }
 
-export async function cohortExplore(filters: {
-  sex?: number | null;
-  age_min?: number | null;
-  age_max?: number | null;
-  cp_in?: number[];
-}) {
-  return jfetch("/api/cohorts/explore", {
+// web/src/api.ts
+// …your existing exports…
+
+export type CohortExploreReq = {
+  sex?: 0 | 1;          // omit if "(any)"
+  ageMin?: number;      // omit if blank
+  ageMax?: number;      // omit if blank
+  cpList?: number[];    // omit if blank
+};
+
+export async function cohortsExplore(req: CohortExploreReq) {
+  // strip undefined to keep payload clean
+  const body: Record<string, unknown> = {};
+  if (req.sex !== undefined) body.sex = req.sex;
+  if (Number.isFinite(req.ageMin!)) body.ageMin = req.ageMin;
+  if (Number.isFinite(req.ageMax!)) body.ageMax = req.ageMax;
+  if (req.cpList && req.cpList.length) body.cpList = req.cpList;
+
+  const r = await fetch("/api/cohorts/explore", {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify(filters),
+    body: JSON.stringify(body),
   });
+
+  if (!r.ok) {
+    // return the raw text so you can see API’s message in UI
+    const txt = await r.text();
+    throw new Error(`/api/cohorts/explore → ${r.status}: ${txt}`);
+  }
+  return r.json();
 }
+

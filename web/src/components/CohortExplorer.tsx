@@ -1,59 +1,107 @@
-/* web/src/components/CohortExplorer.tsx */
+// web/src/components/CohortExplorer.tsx
 import React, { useState } from "react";
-import { cohortExplore } from "../api";
-
-const toNum = (s: string) => (s.trim() === "" ? null : Number(s.trim()));
-const parseList = (s: string) =>
-  s.trim() ? s.split(",").map(t => Number(t.trim())).filter(Number.isFinite) : [];
+import { cohortsExplore } from "../api";
 
 export default function CohortExplorer() {
-  const [sex, setSex] = useState<"any" | "0" | "1">("any");
-  const [ageMin, setAgeMin] = useState("");
-  const [ageMax, setAgeMax] = useState("");
-  const [cp, setCp] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-  const [summary, setSummary] = useState<any>(null);
+  const [sex, setSex] = useState<"" | "0" | "1">(""); // "" means any
+  const [ageMin, setAgeMin] = useState<string>("");
+  const [ageMax, setAgeMax] = useState<string>("");
+  const [cpCsv, setCpCsv] = useState<string>("");
+  const [out, setOut] = useState<any>(null);
+  const [err, setErr] = useState<string>("");
+  const [loading, setLoading] = useState(false);
 
-  async function run() {
-    setBusy(true); setErr(""); setSummary(null);
+  const parseIntOrUndef = (s: string) => {
+    const t = s.trim();
+    if (!t) return undefined;
+    const n = Number(t);
+    return Number.isFinite(n) ? (n as number) : undefined;
+  };
+
+  const parseCsvToNumArray = (s: string) => {
+    const t = s.trim();
+    if (!t) return undefined;
+    const arr = t
+      .split(",")
+      .map(x => x.trim())
+      .filter(Boolean)
+      .map(x => Number(x))
+      .filter(Number.isFinite) as number[];
+    return arr.length ? arr : undefined;
+  };
+
+  const run = async () => {
+    setErr("");
+    setOut(null);
+    setLoading(true);
     try {
       const payload = {
-        sex: sex === "any" ? null : Number(sex),
-        age_min: toNum(ageMin),
-        age_max: toNum(ageMax),
-        cp_in: parseList(cp),
+        sex: sex === "" ? undefined : (Number(sex) as 0 | 1),
+        ageMin: parseIntOrUndef(ageMin),
+        ageMax: parseIntOrUndef(ageMax),
+        cpList: parseCsvToNumArray(cpCsv),
       };
-      const j = await cohortExplore(payload);
-      setSummary(j);
+      const j = await cohortsExplore(payload);
+      setOut(j);
     } catch (e: any) {
-      setErr(String(e.message || e));
+      setErr(e?.message ?? String(e));
     } finally {
-      setBusy(false);
+      setLoading(false);
     }
-  }
+  };
 
   return (
     <div className="card">
       <h2>Cohort Explorer</h2>
+
       <div className="grid-2" style={{ gap: 8 }}>
-        <select className="input" value={sex} onChange={e => setSex(e.target.value as any)}>
-          <option value="any">sex (any)</option>
-          <option value="0">sex=0</option>
-          <option value="1">sex=1</option>
+        <select
+          value={sex}
+          onChange={(e) => setSex(e.target.value as any)}
+          className="input"
+        >
+          <option value="">sex (any)</option>
+          <option value="0">sex = 0</option>
+          <option value="1">sex = 1</option>
         </select>
-        <input className="input" placeholder="Age min" value={ageMin} onChange={e=>setAgeMin(e.target.value)} />
-        <input className="input" placeholder="Age max" value={ageMax} onChange={e=>setAgeMax(e.target.value)} />
-        <input className="input" placeholder="cp list (comma sep)" value={cp} onChange={e=>setCp(e.target.value)} />
+
+        <input
+          className="input"
+          placeholder="Age min"
+          value={ageMin}
+          onChange={(e) => setAgeMin(e.target.value)}
+        />
+
+        <input
+          className="input"
+          placeholder="Age max"
+          value={ageMax}
+          onChange={(e) => setAgeMax(e.target.value)}
+        />
+
+        <input
+          className="input"
+          placeholder="cp list (comma sep)"
+          value={cpCsv}
+          onChange={(e) => setCpCsv(e.target.value)}
+        />
       </div>
-      <div style={{ marginTop: 8 }}>
-        <button className="btn" onClick={run} disabled={busy}>{busy ? "Running…" : "Run"}</button>
-        {err && <div className="muted" style={{ marginTop: 6, color: "#fca5a5" }}>{err}</div>}
-      </div>
-      {summary && (
-        <div className="panel" style={{ marginTop: 10 }}>
-          <div className="panel-title">Summary</div>
-          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{JSON.stringify(summary, null, 2)}</pre>
+
+      <button className="btn" style={{ marginTop: 10 }} onClick={run} disabled={loading}>
+        {loading ? "Running…" : "Run"}
+      </button>
+
+      {err && (
+        <div style={{ color: "#fda4af", marginTop: 8, fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
+          {err}
+        </div>
+      )}
+
+      {out && (
+        <div className="muted" style={{ marginTop: 8 }}>
+          {out.summary
+            ? `count ${out.summary.count}, positive_rate ${out.summary.positive_rate}`
+            : "explore complete"}
         </div>
       )}
     </div>
