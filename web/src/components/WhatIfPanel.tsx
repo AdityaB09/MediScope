@@ -1,43 +1,69 @@
-import React, { useState } from "react";
-import { featureList } from "./PatientForm";
+// web/src/components/WhatIfPanel.tsx
+import React, { useMemo, useState } from "react";
 
-export default function WhatIfPanel({
-  base,
-  basePredReady,
-  onRun
-}:{
-  base:any;
-  basePredReady:boolean;
-  onRun:(deltas:any)=>void;
-}) {
-  const [deltas, setDeltas] = useState<Record<string, number>>({});
-  const set = (k:string, v:number)=> setDeltas(s=>({...s, [k]: v}));
+type Props = {
+  base?: Record<string, number> | null;
+  basePredReady?: boolean;
+  onRun: (deltas: Record<string, number>) => Promise<void> | void;
+};
+
+const FIELDS = [
+  "age","sex","cp","trestbps","chol","fbs","restecg",
+  "thalach","exang","oldpeak","slope","ca","thal",
+];
+
+export default function WhatIfPanel({ base, basePredReady, onRun }: Props) {
+  const [form, setForm] = useState<Record<string, string>>(
+    Object.fromEntries(FIELDS.map(k => [k, "0"]))
+  );
+  const [busy, setBusy] = useState(false);
+
+  const disabled = !base || !basePredReady || busy;
+
+  const set = (k: string, v: string) =>
+    setForm(f => ({ ...f, [k]: v.replace(/[^\d.-]/g, "") }));
+
+  const deltas = useMemo(() => {
+    const d: Record<string, number> = {};
+    for (const k of FIELDS) {
+      const v = Number(form[k] ?? "0");
+      if (!Number.isFinite(v)) continue;
+      if (v !== 0) d[k] = v; // send only non-zero deltas
+    }
+    return d;
+  }, [form]);
+
+  async function submit() {
+    if (disabled) return;
+    setBusy(true);
+    try {
+      await onRun(deltas);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <div className="card">
       <h2>What-If Explorer</h2>
-      <div className="row">
-        {featureList.map(f=>(
-          <div key={f}>
-            <label className="muted">{f} Δ</label>
-            <input type="number" step="any" value={deltas[f] ?? 0}
-                   onChange={e=>set(f, Number(e.target.value))}/>
+      <div className="grid-4">
+        {FIELDS.map(k => (
+          <div key={k}>
+            <div className="muted">{k} Δ</div>
+            <input value={form[k]} onChange={e => set(k, e.target.value)} />
           </div>
         ))}
       </div>
       <div style={{marginTop:12}}>
-        <button
-          className="btn"
-          disabled={!base || !basePredReady}     // ✅ lock until base prediction exists
-          onClick={()=>onRun(deltas)}
-          title={!base || !basePredReady ? "Run a base prediction first" : "Simulate"}
-        >
-          Simulate
+        <button className="btn" onClick={submit} disabled={disabled}>
+          {busy ? "Simulating…" : "Simulate"}
         </button>
+        {!basePredReady && (
+          <span className="muted" style={{marginLeft:8}}>
+            Run a base prediction first.
+          </span>
+        )}
       </div>
-      {(!base || !basePredReady) && (
-        <div className="muted" style={{marginTop:8}}>Run a base prediction first.</div>
-      )}
     </div>
   );
-}
+} 

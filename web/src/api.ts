@@ -1,117 +1,130 @@
-/* web/src/api.ts */
-type Json = Record<string, any>;
-
-async function jfetch(path: string, init?: RequestInit) {
-  const r = await fetch(path, init);
-  if (!r.ok) {
-    const text = await r.text().catch(() => "");
-    throw new Error(`${path} → ${r.status}: ${text || r.statusText}`);
-  }
-  const ct = r.headers.get("content-type") || "";
-  if (ct.includes("application/json")) return r.json();
-  return r.text();
-}
-
-export async function health() {
-  return jfetch("/api/health");
-}
-
-export async function metricsFairness() {
-  return jfetch("/api/metrics/fairness");
-}
-
-export async function globalShap() {
-  return jfetch("/api/shap/global");
-}
-
-export async function predict(features: Json) {
-  return jfetch("/api/predict", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(features),
-  });
-}
-
-export async function whatif(base: Json, deltas: Json) {
-  return jfetch("/api/whatif", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ base, deltas }),
-  });
-}
-
-export async function batchUpload(file: File) {
-  const fd = new FormData();
-  fd.append("file", file, file.name); // must be a Blob/File
-  return jfetch("/api/batch/upload", { method: "POST", body: fd });
-}
-
-export async function downloadPdfBlob(features: Json) {
-  const r = await fetch("/api/report.pdf", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(features),
-  });
-  if (!r.ok) {
-    const t = await r.text().catch(() => "");
-    throw new Error(`/api/report.pdf → ${r.status}: ${t || r.statusText}`);
-  }
-  return r.blob();
-}
-
-export async function downloadPdf(features: Json) {
-  const blob = await downloadPdfBlob(features);
-  return URL.createObjectURL(blob); // caller is responsible for revokeObjectURL
-}
-
-/* Map API /sessions → your table’s expected shape */
-function labelFromProb(p: number, low=0.33, high=0.66) {
-  if (p < low) return "Low";
-  if (p < high) return "Medium";
-  return "High";
-}
-
-export async function latestSessions() {
-  const rows = await jfetch("/api/sessions");
-  if (!Array.isArray(rows)) return [];
-  return rows.map((r: any, i: number) => ({
-    id: i,
-    createdAt: r.when,               // ISO string from API
-    modelVersion: r.model,
-    riskLabel: labelFromProb(Number(r.prob ?? r.score ?? 0)),
-    riskScore: Number(r.score ?? r.prob ?? 0),
-  }));
-}
-
 // web/src/api.ts
-// …your existing exports…
+const B = "/api"; // nginx proxies /api → http://api:8080
 
-export type CohortExploreReq = {
-  sex?: 0 | 1;          // omit if "(any)"
-  ageMin?: number;      // omit if blank
-  ageMax?: number;      // omit if blank
-  cpList?: number[];    // omit if blank
-};
-
-export async function cohortsExplore(req: CohortExploreReq) {
-  // strip undefined to keep payload clean
-  const body: Record<string, unknown> = {};
-  if (req.sex !== undefined) body.sex = req.sex;
-  if (Number.isFinite(req.ageMin!)) body.ageMin = req.ageMin;
-  if (Number.isFinite(req.ageMax!)) body.ageMax = req.ageMax;
-  if (req.cpList && req.cpList.length) body.cpList = req.cpList;
-
-  const r = await fetch("/api/cohorts/explore", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-
+// Helpers
+async function j<T>(r: Response): Promise<T> {
   if (!r.ok) {
-    // return the raw text so you can see API’s message in UI
-    const txt = await r.text();
-    throw new Error(`/api/cohorts/explore → ${r.status}: ${txt}`);
+    const txt = await r.text().catch(() => "");
+    throw new Error(`${r.status} ${r.statusText}: ${txt}`);
   }
   return r.json();
 }
 
+const unifyContribs = (x: any): Record<string, number> => {
+  if (!x) return {};
+  if (x.contribs) return x.contribs;
+  if (x.contrib) return x.contrib;
+  if (Array.isArray(x.shap)) {
+    const o: Record<string, number> = {};
+    for (const pair of x.shap) {
+      // tolerate ["feature", value] or [value, "feature"]
+      if (Array.isArray(pair) && pair.length >= 2) {
+        const k = typeof pair[0] === "string" ? pair[0] : String(pair[1]);
+        const v = typeof pair[0] === "number" ? pair[0] : Number(pair[1]);
+        if (!Number.isNaN(v)) o[k] = v;
+      }
+    }
+    return o;
+  }
+  return {};
+};
+
+export async function health() {
+  return j<any>(await fetch(`${B}/health`));
+}
+
+export async function fairness() {
+  // used by FairnessDashboard
+  return j<any>(await fetch(`${B}/metrics/fairness`));
+}
+
+export async function predict(features: Record<string, number>) {
+  const r = await j<any>(
+    await fetch(`${B}/predict`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(features),
+    })
+  );
+  return {
+    prob: r.prob ?? r.score ?? r.risk ?? 0,
+    label: r.label ?? r.riskLabel ?? undefined,
+    contribs: unifyContribs(r),
+  };
+}
+
+export async function whatif(
+  base: Record<string, number>,
+  deltas: Record<string, number>
+) {
+  const r = await j<any>(
+    await fetch(`${B}/whatif`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ base, deltas }),
+    })
+  );
+  // Accept either {delta_prob, base:{prob,contribs}, tweaked:{...}}
+  // or {dprob, base:{prob, shap:[...]}, tweaked:{...}}
+  return {
+    delta_prob: r.delta_prob ?? r.dprob ?? 0,
+    base: {
+      prob: r.base?.prob ?? r.base_prob ?? null,
+      label: r.base?.label,
+      contribs: unifyContribs(r.base),
+    },
+    tweaked: {
+      prob: r.tweaked?.prob ?? r.tweaked_prob ?? null,
+      label: r.tweaked?.label,
+      contribs: unifyContribs(r.tweaked),
+    },
+  };
+}
+
+export async function globalShap() {
+  const r = await j<any>(await fetch(`${B}/shap/global`));
+  // Accept {features:[...], shap:[...]} or {importances:{k:v}}
+  if (Array.isArray(r.features) && Array.isArray(r.shap)) {
+    const o: Record<string, number> = {};
+    r.features.forEach((k: string, i: number) => (o[k] = Number(r.shap[i] ?? 0)));
+    return o;
+  }
+  if (r.importances) return r.importances;
+  return {};
+}
+
+export async function cohortsExplore(payload: any) {
+  return j<any>(
+    await fetch(`${B}/cohorts/explore`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(payload ?? {}),
+    })
+  );
+}
+
+export async function latestSessions() {
+  return j<any[]>(await fetch(`${B}/sessions/latest`));
+}
+
+export async function downloadPdf(features: Record<string, number>) {
+  const r = await fetch(`${B}/report.pdf`, {
+    method: "POST",
+    body: JSON.stringify(features),
+    headers: { "content-type": "application/json" },
+  });
+  if (!r.ok) throw new Error("report failed");
+  const blob = await r.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function batchUpload(file: File) {
+  const fd = new FormData();
+  fd.append("file", file); // must be a Blob/File; avoids “not of type Blob”
+  return j<any>(
+    await fetch(`${B}/batch/upload`, {
+      method: "POST",
+      body: fd,
+    })
+  );
+}
