@@ -1,6 +1,6 @@
 [build]
   publish = "dist"
-  command = "VITE_API_BASE=https://mediscope-jtyv.onrender.com npm ci && npm run build"
+  command = "npm run build"
 
 [[redirects]]
   from = "/*"
