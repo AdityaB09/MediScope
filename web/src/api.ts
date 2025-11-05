@@ -103,9 +103,43 @@ export async function cohortsExplore(payload: any) {
   );
 }
 
-export async function latestSessions() {
-  return j<any[]>(await fetch(`${B}/sessions/latest`));
+// web/src/api.ts (drop-in for latestSessions only)
+async function _get<T>(path: string) {
+  const r = await fetch(path);
+  if (!r.ok) throw new Error(String(r.status));
+  return r.json() as Promise<T>;
 }
+
+function _normalizeSessions(raw: any): any[] {
+  // Accept:
+  //  - [{ when, model, prob, score }]
+  //  - [{ createdAt, modelVersion, riskScore, riskLabel }]
+  //  - or nested { rows: [...] }
+  const rows = Array.isArray(raw) ? raw : Array.isArray(raw?.rows) ? raw.rows : [];
+  return rows.map((r: any) => ({
+    id: r.id ?? undefined,
+    createdAt: r.createdAt ?? r.when ?? r.timestamp ?? new Date().toISOString(),
+    modelVersion: r.modelVersion ?? r.model ?? "unknown",
+    riskScore: r.riskScore ?? r.score ?? 0,
+    riskLabel: r.prob ?? r.label ?? "",
+  }));
+}
+
+export async function latestSessions() {
+  const bases = ["/api/sessions/latest", "/api/sessions", "/api/session/latest"];
+  let lastErr: unknown = null;
+  for (const p of bases) {
+    try {
+      const raw = await _get<any>(p);
+      return _normalizeSessions(raw);
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  console.warn("No sessions endpoint found", lastErr);
+  return [];
+}
+
 
 export async function downloadPdf(features: Record<string, number>) {
   const r = await fetch(`${B}/report.pdf`, {

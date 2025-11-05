@@ -141,7 +141,7 @@ export default function App() {
               <tr key={s.id}>
                 <td>{new Date(s.createdAt).toLocaleString()}</td>
                 <td>{s.modelVersion}</td>
-                <td>{s.riskLabel}</td>
+                <td>{s.riskLabel > 0.5 ? "High" : "Low"}</td>
                 <td>{(s.riskScore * 100).toFixed(1)}%</td>
               </tr>
             ))}
