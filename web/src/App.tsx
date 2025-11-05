@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import PatientForm from "./components/PatientForm";
 import RiskGauge from "./components/RiskGauge";
 import ShapBar from "./components/ShapBar";
@@ -6,123 +6,193 @@ import WhatIfPanel from "./components/WhatIfPanel";
 import BatchPanel from "./components/BatchPanel";
 import ThresholdTuner from "./components/ThresholdTuner";
 import GlobalShapCard from "./components/GlobalShapCard";
-import { predict, whatif, downloadPdf, latestSessions } from "./api";
 import FairnessDashboard from "./components/FairnessDashboard";
 import CohortExplorer from "./components/CohortExplorer";
+import SessionsTable from "./components/SessionsTable";
+import { predict, whatif, downloadPdf, latestSessions } from "./api";
+import "./styles.css";
 
 export default function App() {
-  const [result, setResult] = useState<any>(null);            // base prediction result
+  const [result, setResult] = useState<any>(null);
   const [lastFeatures, setLastFeatures] = useState<any>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [whatifResult, setWhatIf] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
 
-  const doPredict = async (features:any) => {
-    setLastFeatures(features);
-    const r = await predict(features);
-    setResult(r);
-    setWhatIf(null);
-    const s = await latestSessions().catch(()=>[]);
-    setSessions(s);
-  };
+  useEffect(() => {
+    latestSessions().then((s) => setSessions(Array.isArray(s) ? s : [])).catch(() => {});
+  }, []);
 
-  const runWhatIf = async (deltas:any) => {
+  const pct = (v: number | undefined) => (v !== undefined ? `${(v * 100).toFixed(1)}%` : "—");
+
+  async function doPredict(features: any) {
+    setBusy(true);
+    try {
+      setLastFeatures(features);
+      const r = await predict(features);
+      setResult(r);
+      setWhatIf(null);
+      const s = await latestSessions().catch(() => []);
+      setSessions(Array.isArray(s) ? s : []);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function runWhatIf(deltas: any) {
     if (!lastFeatures) return;
-    const j = await whatif(lastFeatures, deltas);
-    setWhatIf(j);
-  };
+    setBusy(true);
+    try {
+      const j = await whatif(lastFeatures, deltas);
+      setWhatIf(j);
+    } finally {
+      setBusy(false);
+    }
+  }
 
-  const makePdf = async (features:any) => {
+  async function makePdf(features: any) {
     const url = await downloadPdf(features);
     const a = document.createElement("a");
-    a.href = url; a.download = "mediscope_report.pdf";
-    document.body.appendChild(a); a.click(); a.remove();
+    a.href = url;
+    a.download = "mediscope_report.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     URL.revokeObjectURL(url);
-  };
+  }
 
-  useEffect(() => { latestSessions().then(setSessions).catch(()=>{}); }, []);
+  function clearAll() {
+    setResult(null);
+    setLastFeatures(null);
+    setWhatIf(null);
+  }
 
-  const pct = (v:number|undefined) => v !== undefined ? (v*100).toFixed(1) : "--";
+  const headerStats = useMemo(() => {
+    const risk = result?.prob ?? null;
+    const label = result?.label ?? "";
+    return [
+      { k: "Current Risk", v: risk != null ? pct(risk) : "—", sub: label || "—" },
+      { k: "Sessions", v: String(sessions?.length ?? 0), sub: "in this run" },
+    ];
+  }, [result, sessions]);
 
   return (
-    <div className="container">
-      <div style={{display:"flex", justifyContent:"space-between", alignItems:"baseline"}}>
-        <div style={{fontWeight:800, fontSize:24}}>MediScope — Predictive Healthcare</div>
-        <a href="http://localhost:8080/swagger" target="_blank" rel="noreferrer">API Docs</a>
-      </div>
+    <div className="shell">
+      {/* Top bar */}
+      <header className="topbar">
+        <div className="brand">MediScope</div>
+        <div className="top-actions">
+          <a className="link" href="http://localhost:8080/swagger" target="_blank" rel="noreferrer">API Docs</a>
+          <button className="btn ghost" onClick={clearAll} disabled={busy}>Clear</button>
+          <button className="btn" onClick={() => lastFeatures && makePdf(lastFeatures)} disabled={!lastFeatures || busy}>
+            Download PDF
+          </button>
+        </div>
+      </header>
 
-      <div className="grid-2">
-        <PatientForm onSubmit={doPredict} onPdf={makePdf}/>
-        <div>
+      {/* Hero stats */}
+      <section className="hero">
+        {headerStats.map((s) => (
+          <div key={s.k} className="stat">
+            <div className="stat-k">{s.k}</div>
+            <div className="stat-v">{s.v}</div>
+            <div className="stat-sub">{s.sub}</div>
+          </div>
+        ))}
+      </section>
+
+      {/* Row 1: Patient + Risk */}
+      <section className="grid two">
+        <div className="card">
+          <div className="card-title">Patient Features</div>
+          <PatientForm onSubmit={doPredict} onPdf={makePdf} />
+        </div>
+
+        <div className="card">
+          <div className="card-title">Risk</div>
           {result ? (
             <>
-              <RiskGauge prob={result.prob} label={result.label} />
-              <ShapBar contribs={result.contribs} />
+              <div className="panel">
+                <RiskGauge prob={result.prob} label={result.label} />
+              </div>
+              <div className="panel">
+                <div className="panel-title">Top Feature Contributions (SHAP)</div>
+                <ShapBar contribs={result.contribs || {}} />
+              </div>
             </>
           ) : (
-            <div className="card"><h2>No prediction yet</h2>
-              <div className="muted">Enter features and click Predict.</div></div>
+            <div className="empty">No prediction yet. Enter features and click <b>Predict</b>.</div>
           )}
         </div>
-      </div>
+      </section>
 
-      <div className="grid-2">
-  <FairnessDashboard/>
-  <CohortExplorer/>
-</div>
-      
-      <div className="grid-2">
-        <WhatIfPanel
-          base={lastFeatures}
-          basePredReady={!!result}        // ✅ lock What-If until base exists
-          onRun={runWhatIf}
-        />
+      {/* Row 2: Fairness + Cohort */}
+      <section className="grid two">
         <div className="card">
-          <h2>What-If Result</h2>
-          {whatifResult ? (
-            <div>
-              <div>Δprob: {pct(whatifResult.delta_prob)}%</div>
-              <div className="grid-2" style={{marginTop:8}}>
-                <div>
-                  <h3>Base</h3>
-                  <div className="muted">prob {pct(whatifResult.base?.prob)}% — {whatifResult.base?.label}</div>
-                  <ShapBar contribs={whatifResult.base?.contribs || {}}/>
-                </div>
-                <div>
-                  <h3>Tweaked</h3>
-                  <div className="muted">prob {pct(whatifResult.tweaked?.prob)}% — {whatifResult.tweaked?.label}</div>
-                  <ShapBar contribs={whatifResult.tweaked?.contribs || {}}/>
-                </div>
-              </div>
-            </div>
-          ) : <div className="muted">Set deltas and run to compare.</div>}
+          <div className="card-title">Fairness Dashboard</div>
+          <FairnessDashboard />
         </div>
-      </div>
+        <div className="card">
+          <div className="card-title">Cohort Explorer</div>
+          <CohortExplorer />
+        </div>
+      </section>
 
-      <div className="grid-2">
-        <BatchPanel/>
-        <ThresholdTuner/>
-      </div>
+      {/* Row 3: What-if + Result */}
+      <section className="grid two">
+        <div className="card">
+          <div className="card-title">What-If Explorer</div>
+          <WhatIfPanel base={lastFeatures} basePredReady={!!result} onRun={runWhatIf} />
+          {!result && <div className="muted mt8">Run a base prediction first.</div>}
+        </div>
 
-      <GlobalShapCard/>
+        <div className="card">
+          <div className="card-title">What-If Result</div>
+          {whatifResult ? (
+            <div className="grid two gap">
+              <div className="panel">
+                <div className="panel-title">Base</div>
+                <div className="muted">prob {pct(whatifResult.base?.prob)} — {whatifResult.base?.label || "—"}</div>
+                <ShapBar contribs={whatifResult.base?.contribs || {}} />
+              </div>
+              <div className="panel">
+                <div className="panel-title">Tweaked</div>
+                <div className="muted">prob {pct(whatifResult.tweaked?.prob)} — {whatifResult.tweaked?.label || "—"}</div>
+                <ShapBar contribs={whatifResult.tweaked?.contribs || {}} />
+              </div>
+              <div className="delta-pill">Δprob: {pct(whatifResult.delta_prob)}</div>
+            </div>
+          ) : (
+            <div className="empty">Set deltas and click <b>Simulate</b> to compare.</div>
+          )}
+        </div>
+      </section>
 
-      <div className="card">
-        <h2>Recent Sessions</h2>
-        <table>
-          <thead><tr><th>When</th><th>Model</th><th>Risk</th><th>Score</th></tr></thead>
-          <tbody>
-            {sessions.map((s:any)=>(
-              <tr key={s.id}>
-                <td>{new Date(s.createdAt).toLocaleString()}</td>
-                <td>{s.modelVersion}</td>
-                <td>{s.riskLabel}</td>
-                <td>{(s.riskScore*100).toFixed(1)}%</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      {/* Row 4: Batch + Threshold */}
+      <section className="grid two">
+        <div className="card">
+          <BatchPanel />
+        </div>
+        <div className="card">
+          <ThresholdTuner />
+        </div>
+      </section>
 
-      <div className="muted">Dataset: UCI Heart Disease (Cleveland); Model: Logistic Regression (scaled).</div>
+      {/* Row 5: Global SHAP */}
+      <section className="card">
+        <div className="card-title">Global SHAP (Cohort)</div>
+        <GlobalShapCard />
+      </section>
+
+      {/* Row 6: Sessions */}
+      <section className="card">
+        <div className="card-title">Recent Sessions</div>
+        <SessionsTable rows={sessions} />
+      </section>
+
+      <footer className="footer muted">
+        Dataset: UCI Heart Disease (Cleveland) — Model: Logistic Regression (scaled)
+      </footer>
     </div>
   );
 }

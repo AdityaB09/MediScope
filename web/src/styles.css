@@ -1,0 +1,52 @@
+:root{
+  --bg:#0b1220; --panel:#111827; --muted:#94a3b8; --text:#e5e7eb;
+  --brand:#22d3ee; --accent:#60a5fa; --good:#34d399; --ring:#334155;
+}
+
+*{box-sizing:border-box}
+html,body,#root{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,Segoe UI,Roboto,Helvetica,Arial}
+
+a.link{color:var(--brand);text-decoration:none}
+a.link:hover{text-decoration:underline}
+
+.shell{max-width:1200px;margin:0 auto;padding:18px}
+
+.topbar{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+.brand{font-weight:900;letter-spacing:.3px;font-size:22px}
+.top-actions{display:flex;gap:8px;align-items:center}
+
+.btn{
+  background:var(--accent); border:none; color:#081018; border-radius:12px;
+  padding:8px 12px; font-weight:700; cursor:pointer; box-shadow:0 0 0 0 rgba(0,0,0,0);
+}
+.btn:hover{filter:brightness(1.04)}
+.btn:disabled{opacity:.6; cursor:not-allowed}
+.btn.ghost{background:transparent; color:var(--text); border:1px solid var(--ring)}
+
+.hero{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.stat{background:var(--panel);border-radius:16px;padding:12px;border:1px solid var(--ring)}
+.stat-k{opacity:.7;font-size:12px}
+.stat-v{font-size:24px;font-weight:800;margin-top:2px}
+.stat-sub{opacity:.7;font-size:12px;margin-top:2px}
+
+.grid.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:12px}
+.grid.two.gap{gap:16px}
+
+.card{background:var(--panel);border-radius:16px;padding:12px;border:1px solid var(--ring)}
+.card-title{font-weight:800;margin-bottom:8px}
+.panel{margin-top:8px}
+.panel-title{font-weight:700;margin-bottom:6px}
+.empty{opacity:.65;border:1px dashed var(--ring);border-radius:12px;padding:16px;text-align:center}
+
+.muted{color:var(--muted)}
+.mt8{margin-top:8px}
+.delta-pill{
+  margin-top:8px; display:inline-flex; align-items:center; gap:6px;
+  border:1px solid var(--ring); border-radius:999px; padding:6px 10px; font-weight:700;
+}
+
+.table-wrap{overflow:auto}
+.table{width:100%; border-collapse:collapse}
+.table th, .table td{padding:8px; border-bottom:1px solid var(--ring); text-align:left}
+.table tr:hover td{background:#0e1525}
