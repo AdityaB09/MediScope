@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { fairness } from "../api";
+import { metricsFairness as fairness } from "../api";
 
 type GroupRow = { group: string; count: number; positive_rate: number };
 

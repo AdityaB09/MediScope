@@ -1,82 +1,97 @@
-// web/src/api.ts
-const BASE = "/api"; // nginx proxies /api/* -> http://api:8080/*
+/* web/src/api.ts */
+type Json = Record<string, any>;
 
-export type Patient = {
-  age: number; sex: number; cp: number; trestbps: number; chol: number;
-  fbs: number; restecg: number; thalach: number; exang: number;
-  oldpeak: number; slope: number; ca: number; thal: number;
-};
-
-async function json<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(`${BASE}${path}`, {
-    headers: { "content-type": "application/json" },
-    ...init,
-  });
-  if (!r.ok) throw new Error(`${path} -> ${r.status}`);
-  return r.json();
+async function jfetch(path: string, init?: RequestInit) {
+  const r = await fetch(path, init);
+  if (!r.ok) {
+    const text = await r.text().catch(() => "");
+    throw new Error(`${path} → ${r.status}: ${text || r.statusText}`);
+  }
+  const ct = r.headers.get("content-type") || "";
+  if (ct.includes("application/json")) return r.json();
+  return r.text();
 }
 
 export async function health() {
-  return json<{ status: string; py?: any }>("/health");
+  return jfetch("/api/health");
 }
 
-export async function predict(p: Patient) {
-  return json<{ prob: number; shap: Array<[string, number]> }>("/predict", {
-    method: "POST",
-    body: JSON.stringify(p),
-  });
-}
-
-export async function whatif(base: Patient, tweaked: Partial<Patient>) {
-  return json<{
-    base: { prob: number; shap: Array<[string, number]> };
-    tweaked: { prob: number; shap: Array<[string, number]> };
-    dprob: number;
-  }>("/whatif", {
-    method: "POST",
-    body: JSON.stringify({ base, tweaked }),
-  });
-}
-
-export async function cohorts(payload: {
-  sex?: number; age_min?: number; age_max?: number; cp?: number[];
-}) {
-  return json<{ summary: any; examples: any[] }>("/cohorts/explore", {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
-export async function fairness() {
-  return json<{ status: string; groups: any; metrics: { accuracy: number|null } }>(
-    "/metrics/fairness"
-  );
+export async function metricsFairness() {
+  return jfetch("/api/metrics/fairness");
 }
 
 export async function globalShap() {
-  // returns {status:"ok", features:[string[]], shap:[number[]]}
-  return json<{ status: string; features: string[]; shap: number[] }>("/shap/global");
+  return jfetch("/api/shap/global");
 }
 
-export async function batchUploadCsv(file: File) {
+export async function predict(features: Json) {
+  return jfetch("/api/predict", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(features),
+  });
+}
+
+export async function whatif(base: Json, deltas: Json) {
+  return jfetch("/api/whatif", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ base, deltas }),
+  });
+}
+
+export async function batchUpload(file: File) {
   const fd = new FormData();
-  fd.append("file", file, file.name);
-  const r = await fetch(`${BASE}/batch/upload`, { method: "POST", body: fd });
-  if (!r.ok) throw new Error(`/batch/upload -> ${r.status}`);
-  return r.json();
+  fd.append("file", file, file.name); // must be a Blob/File
+  return jfetch("/api/batch/upload", { method: "POST", body: fd });
+}
+
+export async function downloadPdfBlob(features: Json) {
+  const r = await fetch("/api/report.pdf", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(features),
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => "");
+    throw new Error(`/api/report.pdf → ${r.status}: ${t || r.statusText}`);
+  }
+  return r.blob();
+}
+
+export async function downloadPdf(features: Json) {
+  const blob = await downloadPdfBlob(features);
+  return URL.createObjectURL(blob); // caller is responsible for revokeObjectURL
+}
+
+/* Map API /sessions → your table’s expected shape */
+function labelFromProb(p: number, low=0.33, high=0.66) {
+  if (p < low) return "Low";
+  if (p < high) return "Medium";
+  return "High";
 }
 
 export async function latestSessions() {
-  // [{when: "2025-11-04T18:22:51.000Z", model:"heart-v1", prob:0.37, score:0.37}]
-  return json<Array<{ when: string; model: string; prob: number; score: number }>>("/sessions");
+  const rows = await jfetch("/api/sessions");
+  if (!Array.isArray(rows)) return [];
+  return rows.map((r: any, i: number) => ({
+    id: i,
+    createdAt: r.when,               // ISO string from API
+    modelVersion: r.model,
+    riskLabel: labelFromProb(Number(r.prob ?? r.score ?? 0)),
+    riskScore: Number(r.score ?? r.prob ?? 0),
+  }));
 }
 
-export async function downloadPdf() {
-  const r = await fetch(`${BASE}/report.pdf`);
-  if (!r.ok) throw new Error("report.pdf failed");
-  const blob = await r.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = "report.pdf"; a.click();
-  URL.revokeObjectURL(url);
+export async function cohortExplore(filters: {
+  sex?: number | null;
+  age_min?: number | null;
+  age_max?: number | null;
+  cp_in?: number[];
+}) {
+  return jfetch("/api/cohorts/explore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(filters),
+  });
 }

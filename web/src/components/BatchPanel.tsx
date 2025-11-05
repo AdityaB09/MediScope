@@ -1,39 +1,53 @@
-import React, { useState } from "react";
-import { batchUploadCsv } from "../api";
+/* web/src/components/BatchPanel.tsx */
+import React, { useRef, useState } from "react";
+import { batchUpload } from "../api";
 
 export default function BatchPanel() {
-  const [csv, setCsv] = useState<string>("");
+  const fileRef = useRef<HTMLInputElement | null>(null);
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
+  const [result, setResult] = useState<any>(null);
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
-    const text = await f.text();
-    setCsv(text);
-  }
-
-  async function upload() {
-    setMsg("Uploading…");
+  async function onUpload() {
+    setMsg("");
+    setResult(null);
+    const input = fileRef.current;
+    const file = input?.files?.[0];
+    if (!file) {
+      setMsg("Please choose a CSV file first.");
+      return;
+    }
+    if (!file.name.toLowerCase().endsWith(".csv")) {
+      setMsg("Only .csv files are supported.");
+      return;
+    }
+    setBusy(true);
     try {
-      const res = await batchUploadCsv(csv);
-      setMsg(typeof res === "string" ? res : JSON.stringify(res));
+      const j = await batchUpload(file);
+      setResult(j);
+      setMsg("Uploaded ✓");
     } catch (e: any) {
-      setMsg(e?.message || "upload failed");
+      setMsg(String(e.message || e));
+    } finally {
+      setBusy(false);
     }
   }
 
   return (
-    <div className="p-3 rounded-xl bg-[#111827]">
-      <div className="font-semibold mb-2">Batch Scoring (CSV)</div>
-      <input type="file" accept=".csv,text/csv" onChange={onFile} />
-      <button
-        onClick={upload}
-        className="ml-2 btn"
-        style={{ background: "var(--accent)", borderRadius: 10, padding: "6px 10px", fontWeight: 600 }}
-      >
-        Upload
-      </button>
-      {msg && <div className="mt-2 text-sm opacity-70 break-all">{msg}</div>}
+    <div className="card">
+      <h2>Batch Scoring (CSV)</h2>
+      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <input ref={fileRef} type="file" accept=".csv" />
+        <button className="btn" onClick={onUpload} disabled={busy}>
+          {busy ? "Uploading…" : "Upload"}
+        </button>
+      </div>
+      {msg && <div className="muted" style={{ marginTop: 8 }}>{msg}</div>}
+      {result && (
+        <pre style={{ marginTop: 8, maxHeight: 220, overflow: "auto" }}>
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      )}
     </div>
   );
 }
